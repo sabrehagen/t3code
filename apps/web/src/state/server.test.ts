@@ -5,7 +5,7 @@ import { Atom, AtomRegistry } from "effect/reactivity";
 import { afterEach, describe, expect, it } from "vite-plus/test";
 
 import { resolveShortcutCommand } from "../keybindings";
-import { createShortcutKeybindingsAtom } from "./server";
+import { createGlobalServerConfigAtom, createShortcutKeybindingsAtom } from "./server";
 
 const PRIMARY = EnvironmentId.make("primary");
 const A = EnvironmentId.make("a");
@@ -38,11 +38,12 @@ function makeHarness(input: {
   const environmentsAtom = Atom.make<ReadonlyMap<EnvironmentId, Environment>>(
     new Map(input.environments ?? []),
   );
-  const keybindingsAtom = createShortcutKeybindingsAtom({
+  const globalConfigAtom = createGlobalServerConfigAtom({
     primaryEnvironmentIdAtom,
     primaryConfigAtom,
     environmentsAtom,
   });
+  const keybindingsAtom = createShortcutKeybindingsAtom(globalConfigAtom);
   const registry = AtomRegistry.make();
   registries.push(registry);
   // Keep the atom mounted, like the shortcut handlers do.
@@ -53,6 +54,7 @@ function makeHarness(input: {
     primaryConfigAtom,
     environmentsAtom,
     keybindings: () => registry.get(keybindingsAtom),
+    globalEnvironmentId: () => registry.get(globalConfigAtom)?.environmentId ?? null,
     cmdN: () =>
       resolveShortcutCommand(
         { key: "n", metaKey: true, ctrlKey: false, shiftKey: false, altKey: false },
@@ -67,7 +69,7 @@ afterEach(() => {
   for (const registry of registries.splice(0)) registry.dispose();
 });
 
-describe("createShortcutKeybindingsAtom", () => {
+describe("global server config", () => {
   it("updates shortcuts from the first connected, configured environment without a primary", () => {
     const harness = makeHarness({});
     const aConfig = config(STALE);
@@ -110,9 +112,11 @@ describe("createShortcutKeybindingsAtom", () => {
       environments: [[B, environment("connected", config(SWAPPED))]],
     });
     expect(harness.cmdN()).toBe("chat.newLocal");
+    expect(harness.globalEnvironmentId()).toBe(B);
 
     harness.registry.set(harness.primaryEnvironmentIdAtom, PRIMARY);
     expect(harness.cmdN()).toBe("chat.new");
+    expect(harness.globalEnvironmentId()).toBe(PRIMARY);
 
     harness.registry.set(harness.primaryConfigAtom, config(STALE));
     expect(harness.cmdN()).toBe("chat.newWithoutProject");
@@ -122,5 +126,6 @@ describe("createShortcutKeybindingsAtom", () => {
 
     harness.registry.set(harness.primaryEnvironmentIdAtom, null);
     expect(harness.cmdN()).toBe("chat.newLocal");
+    expect(harness.globalEnvironmentId()).toBe(B);
   });
 });

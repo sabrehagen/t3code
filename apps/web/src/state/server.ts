@@ -14,6 +14,7 @@ import {
   AVAILABLE_CONNECTION_STATE,
   presentConnectionState,
   type EnvironmentPresentation,
+  type EnvironmentServerConfig,
 } from "@t3tools/client-runtime/connection";
 import { createServerEnvironmentAtoms } from "@t3tools/client-runtime/state/server";
 import { createOutdatedServerUpdateCommand } from "@t3tools/client-runtime/state/outdatedServerUpdate";
@@ -115,23 +116,39 @@ export const primaryServerProvidersAtom = Atom.make(
     get(primaryServerConfigAtom)?.providers ?? EMPTY_SERVER_PROVIDERS,
 ).pipe(Atom.withLabel("web-primary-server-providers"));
 
-/** Without a primary, global shortcuts follow unscoped Settings. */
-export function createShortcutKeybindingsAtom(input: {
+interface GlobalServerConfig {
+  readonly environmentId: EnvironmentId;
+  readonly config: EnvironmentServerConfig | null;
+}
+
+/** Without a primary, client-wide config (shortcuts, themes) follows unscoped Settings. */
+export function createGlobalServerConfigAtom(input: {
   readonly primaryEnvironmentIdAtom: Atom.Atom<EnvironmentId | null>;
   readonly primaryConfigAtom: Atom.Atom<ServerConfig | null>;
   readonly environmentsAtom: Atom.Atom<
     ReadonlyMap<EnvironmentId, Pick<EnvironmentPresentation, "connection" | "serverConfig">>
   >;
 }) {
-  // Selected before merging, so unrelated config updates keep the merged array.
-  const customAtom = Atom.make((get) => {
-    if (get(input.primaryEnvironmentIdAtom) !== null) {
+  return Atom.make((get): GlobalServerConfig | null => {
+    const primaryEnvironmentId = get(input.primaryEnvironmentIdAtom);
+    if (primaryEnvironmentId !== null) {
       // A primary stays authoritative while its config loads.
-      return get(input.primaryConfigAtom)?.keybindings ?? null;
+      return { environmentId: primaryEnvironmentId, config: get(input.primaryConfigAtom) };
     }
-    const environments = [...get(input.environmentsAtom).values()];
-    return environments.find(isConnectedWithConfig)?.serverConfig?.keybindings ?? null;
+    for (const [environmentId, environment] of get(input.environmentsAtom)) {
+      if (isConnectedWithConfig(environment)) {
+        return { environmentId, config: environment.serverConfig };
+      }
+    }
+    return null;
   });
+}
+
+export function createShortcutKeybindingsAtom(
+  globalConfigAtom: Atom.Atom<GlobalServerConfig | null>,
+) {
+  // Selected before merging, so unrelated config updates keep the merged array.
+  const customAtom = Atom.make((get) => get(globalConfigAtom)?.config?.keybindings ?? null);
   return Atom.make((get): ServerConfig["keybindings"] =>
     mergeWithDefaultKeybindings(get(customAtom) ?? []),
   );
@@ -160,11 +177,23 @@ const environmentConnectionsAtom = Atom.make((get) => {
   return environments;
 });
 
-export const primaryServerKeybindingsAtom = createShortcutKeybindingsAtom({
+const globalServerConfigAtom = createGlobalServerConfigAtom({
   primaryEnvironmentIdAtom,
   primaryConfigAtom: primaryServerConfigAtom,
   environmentsAtom: environmentConnectionsAtom,
-}).pipe(Atom.withLabel("web-primary-server-keybindings"));
+}).pipe(Atom.withLabel("web-global-server-config"));
+
+export const globalServerEnvironmentIdAtom = Atom.make(
+  (get): EnvironmentId | null => get(globalServerConfigAtom)?.environmentId ?? null,
+).pipe(Atom.withLabel("web-global-server-environment-id"));
+
+export const globalServerSettingsAtom = Atom.make(
+  (get): ServerSettings => get(globalServerConfigAtom)?.config?.settings ?? DEFAULT_SERVER_SETTINGS,
+).pipe(Atom.withLabel("web-global-server-settings"));
+
+export const primaryServerKeybindingsAtom = createShortcutKeybindingsAtom(
+  globalServerConfigAtom,
+).pipe(Atom.withLabel("web-primary-server-keybindings"));
 
 export const primaryServerAvailableEditorsAtom = Atom.make(
   (get): ReadonlyArray<EditorId> =>
@@ -175,7 +204,7 @@ const EMPTY_ENVIRONMENT_THEMES: ReadonlyArray<EnvironmentTheme> = [];
 
 export const primaryServerEnvironmentThemesAtom = Atom.make(
   (get): ReadonlyArray<EnvironmentTheme> =>
-    get(primaryServerConfigAtom)?.environmentThemes ?? EMPTY_ENVIRONMENT_THEMES,
+    get(globalServerConfigAtom)?.config?.environmentThemes ?? EMPTY_ENVIRONMENT_THEMES,
 ).pipe(Atom.withLabel("web-primary-server-environment-themes"));
 
 export const providersIgnoringCheckedAtAtom = Atom.family((environmentId: EnvironmentId) =>
